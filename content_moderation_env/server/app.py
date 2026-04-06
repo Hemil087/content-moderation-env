@@ -35,12 +35,13 @@ except Exception as e:  # pragma: no cover
         "openenv is required for the web interface. Install dependencies with '\n    uv sync\n'"
     ) from e
 
-try:
-    from ..models import ContentModerationAction, ContentModerationObservation
-    from .content_moderation_env_environment import ContentModerationEnvironment
-except (ModuleNotFoundError, ImportError):
-    from models import ContentModerationAction, ContentModerationObservation
-    from content_moderation_env_environment import ContentModerationEnvironment
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from models import ContentModerationAction, ContentModerationObservation
+from content_moderation_env_environment import ContentModerationEnvironment
 
 
 # Create the app with web interface and README integration
