@@ -7,9 +7,9 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends git && \
     rm -rf /var/lib/apt/lists/*
 
-COPY . /app/repo
+COPY content_moderation_env/ /app/content_moderation_env/
 
-WORKDIR /app/repo/content_moderation_env
+WORKDIR /app/content_moderation_env
 
 RUN if ! command -v uv >/dev/null 2>&1; then \
         curl -LsSf https://astral.sh/uv/install.sh | sh && \
@@ -17,28 +17,17 @@ RUN if ! command -v uv >/dev/null 2>&1; then \
         mv /root/.local/bin/uvx /usr/local/bin/uvx; \
     fi
 
-RUN --mount=type=cache,target=/root/.cache/uv \
-    if [ -f uv.lock ]; then \
-        uv sync --frozen --no-install-project --no-editable; \
-    else \
-        uv sync --no-install-project --no-editable; \
-    fi
-
-RUN --mount=type=cache,target=/root/.cache/uv \
-    if [ -f uv.lock ]; then \
-        uv sync --frozen --no-editable; \
-    else \
-        uv sync --no-editable; \
-    fi
+RUN uv pip install --system \
+    "openenv-core[core]>=0.2.2" \
+    "uvicorn>=0.24.0" \
+    "fastapi>=0.104.0"
 
 FROM ${BASE_IMAGE}
 
-WORKDIR /app
+COPY --from=builder /usr/local/lib /usr/local/lib
+COPY --from=builder /usr/local/bin/uvicorn /usr/local/bin/uvicorn
+COPY content_moderation_env/ /app/content_moderation_env/
 
-COPY --from=builder /app/repo/content_moderation_env/.venv /app/.venv
-COPY --from=builder /app/repo/content_moderation_env /app/content_moderation_env
-
-ENV PATH="/app/.venv/bin:$PATH"
 ENV PYTHONPATH="/app:$PYTHONPATH"
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
