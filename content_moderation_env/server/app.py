@@ -18,14 +18,14 @@ Endpoints:
     - WS /ws: WebSocket endpoint for persistent sessions
 
 Usage:
-    # Development (with auto-reload):
-    uvicorn server.app:app --reload --host 0.0.0.0 --port 8000
+    # Development (from git root, with auto-reload):
+    uvicorn content_moderation_env.server.app:app --reload --host 0.0.0.0 --port 8000
 
-    # Production:
-    uvicorn server.app:app --host 0.0.0.0 --port 8000 --workers 4
+    # Production (from git root):
+    uvicorn content_moderation_env.server.app:app --host 0.0.0.0 --port 8000 --workers 4
 
     # Or run directly:
-    python -m server.app
+    python -m content_moderation_env.server.app
 """
 
 try:
@@ -35,13 +35,16 @@ except Exception as e:  # pragma: no cover
         "openenv is required for the web interface. Install dependencies with '\n    uv sync\n'"
     ) from e
 
-import sys
-import os
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-from models import ContentModerationAction, ContentModerationObservation
-from content_moderation_env_environment import ContentModerationEnvironment
+try:
+    from ..models import ContentModerationAction, ContentModerationObservation
+    from .content_moderation_env_environment import ContentModerationEnvironment
+except ImportError:
+    # Fallback when not running as an installed package (e.g. bare uvicorn server.app:app)
+    import sys as _sys, os as _os
+    _sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+    _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+    from models import ContentModerationAction, ContentModerationObservation
+    from content_moderation_env_environment import ContentModerationEnvironment
 
 
 # Create the app with web interface and README integration
