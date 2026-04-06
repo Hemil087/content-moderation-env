@@ -2,6 +2,5 @@ spec_version: 1
 name: content_moderation_env
 type: space
 runtime: fastapi
-app: server.app:app
+app: content_moderation_env.server.app:app
 port: 8000
-
