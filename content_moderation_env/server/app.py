@@ -38,9 +38,9 @@ except Exception as e:  # pragma: no cover
 try:
     from ..models import ContentModerationAction, ContentModerationObservation
     from .content_moderation_env_environment import ContentModerationEnvironment
-except ModuleNotFoundError:
+except (ModuleNotFoundError, ImportError):
     from models import ContentModerationAction, ContentModerationObservation
-    from server.content_moderation_env_environment import ContentModerationEnvironment
+    from content_moderation_env_environment import ContentModerationEnvironment
 
 
 # Create the app with web interface and README integration
