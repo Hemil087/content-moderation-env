@@ -4,3 +4,10 @@ type: space
 runtime: fastapi
 app: content_moderation_env.server.app:app
 port: 8000
+tasks:
+  - id: easy
+    description: Clear policy violation, single correct action
+  - id: medium
+    description: Ambiguous content, requires precedent retrieval
+  - id: hard
+    description: Appeal case with conflicting precedents
