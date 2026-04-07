@@ -1,6 +1,6 @@
 ---
 title: Content Moderation Env Environment Server
-emoji: ⏲️
+emoji: 🛡️
 colorFrom: blue
 colorTo: pink
 sdk: docker
@@ -11,245 +11,208 @@ tags:
   - openenv
 ---
 
-# Content Moderation Env Environment
+# Content Moderation Environment
 
-A simple test environment that echoes back messages. Perfect for testing the env APIs as well as demonstrating environment usage patterns.
+An OpenEnv environment where an LLM agent reviews social media posts, retrieves precedent cases, and makes moderation decisions under platform policy constraints.
 
-## Quick Start
+**HF Space:** [https://hemil087-content-moderation-env.hf.space](https://hemil087-content-moderation-env.hf.space)
 
-The simplest way to use the Content Moderation Env environment is through the `ContentModerationEnv` class:
+## Overview
 
-```python
-from content_moderation_env import ContentModerationAction, ContentModerationEnv
+Content moderation is one of the hardest real-world challenges facing social media platforms. Moderators must balance free expression against harmful content, handle ambiguous edge cases, and maintain consistency across millions of decisions. This environment simulates that task for LLM agents.
 
-try:
-    # Create environment from Docker image
-    content_moderation_envenv = ContentModerationEnv.from_docker_image("content_moderation_env-env:latest")
+The agent receives a reported post, the platform's community policy, and access to a database of 20 precedent cases. It must decide whether to remove, allow, label, escalate, or (for appeals) overturn/uphold prior decisions.
 
-    # Reset
-    result = content_moderation_envenv.reset()
-    print(f"Reset: {result.observation.echoed_message}")
+## Tasks
 
-    # Send multiple messages
-    messages = ["Hello, World!", "Testing echo", "Final message"]
+| Task | Difficulty | Description |
+|------|-----------|-------------|
+| `easy` | Low | Clear policy violations or clearly allowed content. Minimal ambiguity. |
+| `medium` | Medium | Ambiguous content (satire, graphic news, coded language) requiring precedent lookup. |
+| `hard` | High | Appeal cases with conflicting precedents, or content where the user threatens legal action. |
 
-    for msg in messages:
-        result = content_moderation_envenv.step(ContentModerationAction(message=msg))
-        print(f"Sent: '{msg}'")
-        print(f"  → Echoed: '{result.observation.echoed_message}'")
-        print(f"  → Length: {result.observation.message_length}")
-        print(f"  → Reward: {result.reward}")
+Each task tier contains 5 fixed episodes. Episodes are selected deterministically using seeded randomness for reproducibility.
 
-finally:
-    # Always clean up
-    content_moderation_envenv.close()
-```
+## Action Space
 
-That's it! The `ContentModerationEnv.from_docker_image()` method handles:
-- Starting the Docker container
-- Waiting for the server to be ready
-- Connecting to the environment
-- Container cleanup when you call `close()`
-
-## Building the Docker Image
-
-Before using the environment, you need to build the Docker image:
-
-```bash
-# From project root
-docker build -t content_moderation_env-env:latest -f server/Dockerfile .
-```
-
-## Deploying to Hugging Face Spaces
-
-You can easily deploy your OpenEnv environment to Hugging Face Spaces using the `openenv push` command:
-
-```bash
-# From the environment directory (where openenv.yaml is located)
-openenv push
-
-# Or specify options
-openenv push --namespace my-org --private
-```
-
-The `openenv push` command will:
-1. Validate that the directory is an OpenEnv environment (checks for `openenv.yaml`)
-2. Prepare a custom build for Hugging Face Docker space (enables web interface)
-3. Upload to Hugging Face (ensuring you're logged in)
-
-### Prerequisites
-
-- Authenticate with Hugging Face: The command will prompt for login if not already authenticated
-
-### Options
-
-- `--directory`, `-d`: Directory containing the OpenEnv environment (defaults to current directory)
-- `--repo-id`, `-r`: Repository ID in format 'username/repo-name' (defaults to 'username/env-name' from openenv.yaml)
-- `--base-image`, `-b`: Base Docker image to use (overrides Dockerfile FROM)
-- `--private`: Deploy the space as private (default: public)
-
-### Examples
-
-```bash
-# Push to your personal namespace (defaults to username/env-name from openenv.yaml)
-openenv push
-
-# Push to a specific repository
-openenv push --repo-id my-org/my-env
-
-# Push with a custom base image
-openenv push --base-image ghcr.io/meta-pytorch/openenv-base:latest
-
-# Push as a private space
-openenv push --private
-
-# Combine options
-openenv push --repo-id my-org/my-env --base-image custom-base:latest --private
-```
-
-After deployment, your space will be available at:
-`https://huggingface.co/spaces/<repo-id>`
-
-The deployed space includes:
-- **Web Interface** at `/web` - Interactive UI for exploring the environment
-- **API Documentation** at `/docs` - Full OpenAPI/Swagger interface
-- **Health Check** at `/health` - Container health monitoring
-- **WebSocket** at `/ws` - Persistent session endpoint for low-latency interactions
-
-## Environment Details
-
-### Action
-**ContentModerationAction**: Contains a single field
-- `message` (str) - The message to echo back
-
-### Observation
-**ContentModerationObservation**: Contains the echo response and metadata
-- `echoed_message` (str) - The message echoed back
-- `message_length` (int) - Length of the message
-- `reward` (float) - Reward based on message length (length × 0.1)
-- `done` (bool) - Always False for echo environment
-- `metadata` (dict) - Additional info like step count
-
-### Reward
-The reward is calculated as: `message_length × 0.1`
-- "Hi" → reward: 0.2
-- "Hello, World!" → reward: 1.3
-- Empty message → reward: 0.0
-
-## Advanced Usage
-
-### Connecting to an Existing Server
-
-If you already have a Content Moderation Env environment server running, you can connect directly:
+| Action | Description | When to Use |
+|--------|-------------|-------------|
+| `retrieve_precedents` | Search the precedent database for similar past cases | Before making any final decision |
+| `remove_content` | Remove the post for policy violation | Dehumanizing content targeting protected groups |
+| `allow_content` | Approve the post as policy-compliant | Political criticism, news reporting, historical context |
+| `add_warning_label` | Keep post but attach a warning label | Graphic content, ambiguous satire, potentially misleading |
+| `escalate` | Send to senior human moderator | User threatens legal action or to leave platform |
+| `overturn_removal` | Reverse a prior removal (appeals only) | Original removal was unjustified (e.g., news/satire removed) |
+| `uphold_removal` | Confirm a prior removal (appeals only) | Original removal was correct |
 
 ```python
-from content_moderation_env import ContentModerationEnv
+from content_moderation_env.models import ContentModerationAction
 
-# Connect to existing server
-content_moderation_envenv = ContentModerationEnv(base_url="<ENV_HTTP_URL_HERE>")
+# Retrieve precedents
+action = ContentModerationAction(
+    action_type="retrieve_precedents",
+    query="hate speech dehumanizing ethnicity"
+)
 
-# Use as normal
-result = content_moderation_envenv.reset()
-result = content_moderation_envenv.step(ContentModerationAction(message="Hello!"))
-```
-
-Note: When connecting to an existing server, `content_moderation_envenv.close()` will NOT stop the server.
-
-### Using the Context Manager
-
-The client supports context manager usage for automatic connection management:
-
-```python
-from content_moderation_env import ContentModerationAction, ContentModerationEnv
-
-# Connect with context manager (auto-connects and closes)
-with ContentModerationEnv(base_url="http://localhost:8000") as env:
-    result = env.reset()
-    print(f"Reset: {result.observation.echoed_message}")
-    # Multiple steps with low latency
-    for msg in ["Hello", "World", "!"]:
-        result = env.step(ContentModerationAction(message=msg))
-        print(f"Echoed: {result.observation.echoed_message}")
-```
-
-The client uses WebSocket connections for:
-- **Lower latency**: No HTTP connection overhead per request
-- **Persistent session**: Server maintains your environment state
-- **Efficient for episodes**: Better for many sequential steps
-
-### Concurrent WebSocket Sessions
-
-The server supports multiple concurrent WebSocket connections. To enable this,
-modify `server/app.py` to use factory mode:
-
-```python
-# In server/app.py - use factory mode for concurrent sessions
-app = create_app(
-    ContentModerationEnvironment,  # Pass class, not instance
-    ContentModerationAction,
-    ContentModerationObservation,
-    max_concurrent_envs=4,  # Allow 4 concurrent sessions
+# Make a final decision
+action = ContentModerationAction(
+    action_type="remove_content",
+    reason="Dehumanizing language targeting ethnic group"
 )
 ```
 
-Then multiple clients can connect simultaneously:
+## Observation Space
+
+After each step, the agent receives:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `post_content` | str | The post or comment being reviewed |
+| `post_metadata` | dict | Platform, report count, timestamp, is_appeal flag |
+| `policy_summary` | str | Platform community policy (always visible) |
+| `precedents` | list | Retrieved precedent cases (populated after `retrieve_precedents`) |
+| `actions_taken` | list | History of actions taken this episode |
+| `step_count` | int | Current step number |
+| `message` | str | Feedback from environment |
+| `done` | bool | Whether the episode has ended |
+| `reward` | float | Reward for the last action |
+
+## Reward Structure
+
+| Event | Reward |
+|-------|--------|
+| Retrieved relevant precedent | +0.15 |
+| Retrieved irrelevant precedent | -0.10 |
+| Correct final decision | +0.50 |
+| Wrong final decision | -0.30 |
+| Relevant precedent bonus (grader) | +0.15 |
+| Same action called twice (loop) | -0.20 |
+| Hit step limit without deciding | -0.30 |
+
+Final episode score is clamped to **0.0–1.0**. Maximum achievable score per episode: **0.8**.
+
+## Quick Start
+
+### Install
+
+```bash
+pip install openenv-core
+pip install git+https://huggingface.co/spaces/Hemil087/content_moderation_env
+```
+
+### Use (Sync)
 
 ```python
-from content_moderation_env import ContentModerationAction, ContentModerationEnv
-from concurrent.futures import ThreadPoolExecutor
+from content_moderation_env.client import ContentModerationEnv
+from content_moderation_env.models import ContentModerationAction
 
-def run_episode(client_id: int):
-    with ContentModerationEnv(base_url="http://localhost:8000") as env:
-        result = env.reset()
-        for i in range(10):
-            result = env.step(ContentModerationAction(message=f"Client {client_id}, step {i}"))
-        return client_id, result.observation.message_length
+with ContentModerationEnv(base_url="https://hemil087-content-moderation-env.hf.space").sync() as env:
+    result = env.reset(options={"task_id": "easy"})
+    print(result.observation.post_content)
 
-# Run 4 episodes concurrently
-with ThreadPoolExecutor(max_workers=4) as executor:
-    results = list(executor.map(run_episode, range(4)))
+    # Retrieve precedents
+    action = ContentModerationAction(
+        action_type="retrieve_precedents",
+        query="hate speech dehumanizing"
+    )
+    result = env.step(action)
+    print(result.observation.precedents)
+
+    # Make final decision
+    action = ContentModerationAction(
+        action_type="remove_content",
+        reason="Dehumanizing language"
+    )
+    result = env.step(action)
+    print(f"Score: {result.reward}, Done: {result.done}")
 ```
 
-## Development & Testing
+### Use (Async)
 
-### Direct Environment Testing
+```python
+import asyncio
+from content_moderation_env.client import ContentModerationEnv
+from content_moderation_env.models import ContentModerationAction
 
-Test the environment logic directly without starting the HTTP server:
+async def main():
+    async with ContentModerationEnv(base_url="https://hemil087-content-moderation-env.hf.space") as env:
+        result = await env.reset(options={"task_id": "medium"})
+        print(result.observation.post_content)
 
-```bash
-# From the server directory
-python3 server/content_moderation_env_environment.py
+asyncio.run(main())
 ```
 
-This verifies that:
-- Environment resets correctly
-- Step executes actions properly
-- State tracking works
-- Rewards are calculated correctly
+## Running Inference
 
-### Running Locally
-
-Run the server locally for development:
+The baseline agent uses an LLM via the OpenAI-compatible API:
 
 ```bash
-uvicorn server.app:app --reload
+# Linux/Mac
+export API_BASE_URL=https://api.groq.com/openai/v1
+export MODEL_NAME=llama-3.3-70b-versatile
+export OPENAI_API_KEY=your_key_here
+python inference.py
+```
+
+```bash
+# Windows
+set API_BASE_URL=https://api.groq.com/openai/v1
+set MODEL_NAME=llama-3.3-70b-versatile
+set OPENAI_API_KEY=your_key_here
+python inference.py
+```
+
+### Baseline Scores
+
+| Task | Score |
+|------|-------|
+| Easy | 0.80 |
+| Medium | 0.80 |
+| Hard | 0.80 |
+| **Average** | **0.80** |
+
+Model: `llama-3.3-70b-versatile` via Groq
+
+## Local Development
+
+```bash
+# Clone and install
+git clone https://github.com/Hemil087/content-moderation-env.git
+cd content-moderation-env
+python -m venv venv
+venv\Scripts\activate  # Windows
+pip install -r requirements.txt
+
+# Start server
+uvicorn content_moderation_env.server.app:app --reload
+
+# Test endpoints
+curl http://localhost:8000/health
+curl -X POST http://localhost:8000/reset
+
+# Run local test (no server needed)
+python test_local.py
 ```
 
 ## Project Structure
 
 ```
-content_moderation_env/
-├── .dockerignore         # Docker build exclusions
-├── __init__.py            # Module exports
-├── README.md              # This file
-├── openenv.yaml           # OpenEnv manifest
-├── pyproject.toml         # Project metadata and dependencies
-├── uv.lock                # Locked dependencies (generated)
-├── client.py              # ContentModerationEnv client
-├── models.py              # Action and Observation models
-└── server/
-    ├── __init__.py        # Server module exports
-    ├── content_moderation_env_environment.py  # Core environment logic
-    ├── app.py             # FastAPI application (HTTP + WebSocket endpoints)
-    └── Dockerfile         # Container image definition
+content-moderation-env/
+├── inference.py                          # LLM agent script (repo root)
+├── test_local.py                         # Local environment test
+├── Dockerfile                            # Container build
+├── requirements.txt                      # Dependencies
+├── content_moderation_env/
+│   ├── __init__.py
+│   ├── models.py                         # Action + Observation definitions
+│   ├── client.py                         # WebSocket client
+│   ├── openenv.yaml                      # Environment manifest
+│   ├── pyproject.toml                    # Package config
+│   └── server/
+│       ├── app.py                        # FastAPI application
+│       └── content_moderation_env_environment.py  # Core environment logic
 ```
+
+## License
+
+BSD 3-Clause License
