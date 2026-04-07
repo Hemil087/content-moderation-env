@@ -34,7 +34,7 @@ HF_TOKEN = os.environ.get("HF_TOKEN", "")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 ENV_URL = os.environ.get(
     "ENV_URL",
-    "https://hemil087-content-moderation-env-76fcc7c.hf.space"
+    "https://hemil087-content-moderation-env.hf.space"
 )
 
 TASKS = ["easy", "medium", "hard"]
@@ -84,18 +84,44 @@ You must respond with a JSON object choosing ONE of these actions:
 7. uphold_removal — For appeals: confirm the prior removal was correct
    {"action_type": "uphold_removal", "reason": "explanation here"}
 
-## STRATEGIC APPROACH
+## MANDATORY STRATEGY
 
-1. Read the post carefully and note any metadata (report count, is_appeal).
-2. If the case is ambiguous, call retrieve_precedents FIRST with a relevant query.
-3. Use the precedents and policy to make your final decision.
-4. For appeals, always check whether the original removal reason was justified.
-5. Never call the same action twice — it will be penalized.
+You MUST follow this exact two-step process:
+
+STEP 1 (ALWAYS): Call retrieve_precedents first with a query describing the key issue.
+   - For hate speech cases, query: "dehumanizing [target group]"
+   - For political content, query: "political criticism opinion"
+   - For satire/comedy, query: "satire comedy offensive"
+   - For graphic content, query: "graphic disturbing news"
+   - For appeals, query: "appeal [original removal reason]"
+
+STEP 2: After reviewing precedents, make your final decision based on:
+   - The platform policy
+   - The precedent cases you retrieved
+   - The specific content and context
+
+## DECISION GUIDELINES
+
+- Content that dehumanizes protected groups (race, religion, gender, sexuality, disability) → remove_content
+- Political criticism targeting policies or public figures' actions → allow_content
+- Factual news reporting, even on sensitive topics → allow_content
+- Historical quotes with educational context → allow_content
+- Graphic/disturbing content with news value → add_warning_label
+- Edgy comedy or satire that is ambiguous → add_warning_label
+- User threatens legal action or to leave platform → escalate
+- Appeals where original removal was wrong (e.g., news/satire removed) → overturn_removal
+- Appeals where original removal was justified → uphold_removal
+
+## CRITICAL RULES
+- ALWAYS retrieve precedents first. Never skip this step.
+- ONLY escalate when the user explicitly threatens legal action or to leave the platform.
+- When unsure between remove and warning label, prefer add_warning_label for comedy/satire.
+- Never call the same action twice — it will be penalized.
 
 ## RESPONSE FORMAT
 
 Always respond with ONLY a valid JSON object. No explanation outside the JSON.
-Example: {"action_type": "remove_content", "reason": "Dehumanizing language targeting ethnic group"}
+Example: {"action_type": "retrieve_precedents", "query": "hate speech dehumanizing ethnicity"}
 """.strip()
 
 
