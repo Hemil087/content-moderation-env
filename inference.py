@@ -10,12 +10,8 @@ Usage:
 Required environment variables:
     API_BASE_URL    - The API endpoint for the LLM
     MODEL_NAME      - The model identifier to use for inference
-    HF_TOKEN        - Your Hugging Face API key
-    OPENAI_API_KEY  - OpenAI API key (used by OpenAI client)
-
-Logs:
-    Emits structured JSON to stdout in [START], [STEP], [END] format.
-    Any deviation from this format will break evaluation scoring.
+    HF_TOKEN        - Hugging Face API key (primary)
+    OPENAI_API_KEY  - OpenAI API key (fallback)
 """
 
 import json
@@ -28,17 +24,17 @@ from openai import OpenAI
 # Configuration
 # ---------------------------------------------------------------------------
 
-API_BASE_URL = os.environ.get("API_BASE_URL", "https://api.openai.com/v1")
-MODEL_NAME = os.environ.get("MODEL_NAME", "gpt-4o-mini")
-HF_TOKEN = os.environ.get("HF_TOKEN", "")
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
-ENV_URL = os.environ.get(
+API_BASE_URL = os.getenv("API_BASE_URL", "https://router.huggingface.co/v1")
+MODEL_NAME = os.getenv("MODEL_NAME", "Qwen/Qwen2.5-72B-Instruct")
+API_KEY = os.getenv("HF_TOKEN") or os.getenv("OPENAI_API_KEY", "")
+ENV_URL = os.getenv(
     "ENV_URL",
-    "https://hemil087-content-moderation-env.hf.space"
+    "https://hemil087-content-moderation-env.hf.space",
 )
 
 TASKS = ["easy", "medium", "hard"]
 MAX_STEPS = 8
+ENV_NAME = "content_moderation_env"
 
 # ---------------------------------------------------------------------------
 # OpenAI client
@@ -46,8 +42,33 @@ MAX_STEPS = 8
 
 client = OpenAI(
     base_url=API_BASE_URL,
-    api_key=OPENAI_API_KEY,
+    api_key=API_KEY,
 )
+
+# ---------------------------------------------------------------------------
+# Structured logging helpers — exact format required by judges
+# ---------------------------------------------------------------------------
+
+def log_start(task: str, env: str, model: str) -> None:
+    print(f"[START] task={task} env={env} model={model}", flush=True)
+
+
+def log_step(step: int, action: str, reward: float, done: bool, error) -> None:
+    error_val = error if error else "null"
+    done_val = str(done).lower()
+    print(
+        f"[STEP] step={step} action={action} reward={reward:.2f} done={done_val} error={error_val}",
+        flush=True,
+    )
+
+
+def log_end(success: bool, steps: int, score: float, rewards: list) -> None:
+    rewards_str = ",".join(f"{r:.2f}" for r in rewards)
+    print(
+        f"[END] success={str(success).lower()} steps={steps} score={score:.2f} rewards={rewards_str}",
+        flush=True,
+    )
+
 
 # ---------------------------------------------------------------------------
 # System prompt for the LLM agent
@@ -117,6 +138,7 @@ STEP 2: After reviewing precedents, make your final decision based on:
 - ONLY escalate when the user explicitly threatens legal action or to leave the platform.
 - When unsure between remove and warning label, prefer add_warning_label for comedy/satire.
 - Never call the same action twice — it will be penalized.
+- ALWAYS include a "reason" field citing the specific policy clause that applies.
 
 ## RESPONSE FORMAT
 
@@ -162,12 +184,12 @@ def build_user_message(observation: dict) -> str:
     return "\n\n".join(parts)
 
 
-def get_llm_action(conversation_history: list) -> dict:
+def get_llm_action(conversation_history: list) -> tuple:
     """Call LLM and parse action from response."""
     response = client.chat.completions.create(
         model=MODEL_NAME,
         messages=conversation_history,
-        temperature=0.0,  # deterministic for reproducibility
+        temperature=0.0,
         max_tokens=256,
     )
 
@@ -183,7 +205,6 @@ def get_llm_action(conversation_history: list) -> dict:
     try:
         action = json.loads(content)
     except json.JSONDecodeError:
-        # Fallback — escalate if we can't parse
         action = {"action_type": "escalate", "reason": "Unable to parse LLM response"}
 
     return action, content
@@ -192,78 +213,71 @@ def get_llm_action(conversation_history: list) -> dict:
 def run_episode(env_client, task_id: str) -> float:
     """
     Run one full episode for the given task_id.
-    Returns the final score (0.0–1.0).
-    Emits structured stdout logs.
+    Returns the final score (0.0-1.0).
+    Emits structured stdout logs in [START]/[STEP]/[END] format.
     """
-    print(json.dumps({"type": "START", "task_id": task_id}))
+    rewards = []
+    steps_taken = 0
+    score = 0.0
 
-    # Reset environment
-    result = env_client.reset(options={"task_id": task_id})
-    obs = result.observation
+    log_start(task_id, ENV_NAME, MODEL_NAME)
 
-    total_reward = 0.0
-    conversation_history = [{"role": "system", "content": SYSTEM_PROMPT}]
-
-    final_actions = {
-        "remove_content",
-        "allow_content",
-        "add_warning_label",
-        "escalate",
-        "overturn_removal",
-        "uphold_removal",
-    }
-
-    for step in range(MAX_STEPS):
-        if obs.done:
-            break
-
-        # Build user message from current observation
-        user_message = build_user_message(obs.__dict__)
-        conversation_history.append({"role": "user", "content": user_message})
-
-        # Get LLM action
-        action_dict, raw_response = get_llm_action(conversation_history)
-
-        # Add assistant response to history
-        conversation_history.append({"role": "assistant", "content": raw_response})
-
-        # Build action object
-        from content_moderation_env.models import ContentModerationAction
-        action = ContentModerationAction(
-            action_type=action_dict.get("action_type", "escalate"),
-            reason=action_dict.get("reason"),
-            query=action_dict.get("query"),
-        )
-
-        # Step environment
-        result = env_client.step(action)
+    try:
+        # Reset environment
+        result = env_client.reset(options={"task_id": task_id})
         obs = result.observation
-        reward = result.reward or 0.0
-        done = result.done
 
-        total_reward = obs.reward if done else total_reward + reward
+        conversation_history = [{"role": "system", "content": SYSTEM_PROMPT}]
 
-        print(json.dumps({
-            "type": "STEP",
-            "task_id": task_id,
-            "step": step + 1,
-            "action": action_dict,
-            "reward": reward,
-            "done": done,
-            "message": obs.message,
-        }))
+        for step in range(MAX_STEPS):
+            if obs.done:
+                break
 
-        if done:
-            total_reward = obs.reward  # final graded score
-            break
+            # Build user message from current observation
+            user_message = build_user_message(obs.__dict__)
+            conversation_history.append({"role": "user", "content": user_message})
 
-    print(json.dumps({
-        "type": "END",
-        "task_id": task_id,
-        "total_reward": total_reward,
-    }))
+            # Get LLM action
+            action_dict, raw_response = get_llm_action(conversation_history)
+            conversation_history.append({"role": "assistant", "content": raw_response})
 
-    return total_reward
+            # Build action object
+            from content_moderation_env.models import ContentModerationAction
+            action = ContentModerationAction(
+                action_type=action_dict.get("action_type", "escalate"),
+                reason=action_dict.get("reason"),
+                query=action_dict.get("query"),
+            )
+
+            # Step environment
+            result = env_client.step(action)
+            obs = result.observation
+            reward = result.reward or 0.0
+            done = result.done
+
+            steps_taken = step + 1
+            rewards.append(reward)
+
+            log_step(
+                step=steps_taken,
+                action=action_dict.get("action_type", "unknown"),
+                reward=reward,
+                done=done,
+                error=None,
+            )
+
+            if done:
+                score = obs.reward  # final graded score
+                break
+
+    except Exception as e:
+        print(f"[DEBUG] Episode error: {e}", file=sys.stderr)
+
+    finally:
+        success = score > 0.0
+        log_end(success, steps_taken, score, rewards)
+
+    return score
 
 
 # ---------------------------------------------------------------------------
@@ -273,25 +287,9 @@ def run_episode(env_client, task_id: str) -> float:
 def main():
     from content_moderation_env.client import ContentModerationEnv
 
-    print(json.dumps({
-        "type": "INFO",
-        "model": MODEL_NAME,
-        "env_url": ENV_URL,
-        "tasks": TASKS,
-    }))
-
-    scores = {}
-
     with ContentModerationEnv(base_url=ENV_URL).sync() as env:
         for task_id in TASKS:
-            score = run_episode(env, task_id)
-            scores[task_id] = score
-
-    print(json.dumps({
-        "type": "SUMMARY",
-        "scores": scores,
-        "average": round(sum(scores.values()) / len(scores), 4),
-    }))
+            run_episode(env, task_id)
 
 
 if __name__ == "__main__":
