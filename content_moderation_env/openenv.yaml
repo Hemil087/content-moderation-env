@@ -6,8 +6,8 @@ app: content_moderation_env.server.app:app
 port: 8000
 tasks:
   - id: easy
-    description: Clear policy violation, single correct action
+    description: "Clear policy violations (hate speech, dehumanization) or clearly allowed content (news, political opinion). Minimal ambiguity — agent should identify correct action after one precedent retrieval."
   - id: medium
-    description: Ambiguous content, requires precedent retrieval
+    description: "Ambiguous content requiring careful precedent analysis — coded language, edgy satire, graphic news. Multiple valid-seeming actions, but only one is correct per policy."
   - id: hard
-    description: Appeal case with conflicting precedents
+    description: "Appeal cases with conflicting precedents, coded dog-whistle language, users threatening legal action. Requires multi-step reasoning and nuanced policy interpretation."

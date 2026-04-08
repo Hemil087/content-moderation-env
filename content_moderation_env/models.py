@@ -67,7 +67,7 @@ class ContentModerationObservation(Observation):
 
     post_metadata: dict = Field(
         default_factory=dict,
-        description="Metadata about the post: platform, report_count, timestamp, is_appeal"
+        description="Metadata about the post: platform, report_count, timestamp, is_appeal, author context, content context"
     )
 
     policy_summary: str = Field(
@@ -79,6 +79,17 @@ class ContentModerationObservation(Observation):
     precedents: List[dict] = Field(
         default_factory=list,
         description="List of similar past cases retrieved from the precedent database"
+    )
+
+    # Contextual signals
+    similar_post_count: int = Field(
+        default=0,
+        description="Number of similar posts currently on the platform — scale matters for moderation urgency"
+    )
+
+    confidence_guidance: str = Field(
+        default="",
+        description="Guidance on how much certainty this case requires before making a decision"
     )
 
     # Episode tracking

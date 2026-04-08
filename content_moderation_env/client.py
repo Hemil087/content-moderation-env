@@ -61,6 +61,8 @@ class ContentModerationEnv(
             post_metadata=obs_data.get("post_metadata", {}),
             policy_summary=obs_data.get("policy_summary", ""),
             precedents=obs_data.get("precedents", []),
+            similar_post_count=obs_data.get("similar_post_count", 0),
+            confidence_guidance=obs_data.get("confidence_guidance", ""),
             actions_taken=obs_data.get("actions_taken", []),
             step_count=obs_data.get("step_count", 0),
             message=obs_data.get("message", ""),

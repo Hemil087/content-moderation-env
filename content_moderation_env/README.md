@@ -17,21 +17,27 @@ An OpenEnv environment where an LLM agent reviews social media posts, retrieves 
 
 **HF Space:** [https://hemil087-content-moderation-env.hf.space](https://hemil087-content-moderation-env.hf.space)
 
+---
+
 ## Overview
 
 Content moderation is one of the hardest real-world challenges facing social media platforms. Moderators must balance free expression against harmful content, handle ambiguous edge cases, and maintain consistency across millions of decisions. This environment simulates that task for LLM agents.
 
-The agent receives a reported post, the platform's community policy, and access to a database of 20 precedent cases. It must decide whether to remove, allow, label, escalate, or (for appeals) overturn/uphold prior decisions.
+The agent receives a reported post with rich metadata (author history, engagement metrics, reporter credibility, automated classifier scores), the platform's community policy, and access to a database of 20 precedent cases. It must decide whether to remove, allow, label, escalate, or (for appeals) overturn/uphold prior decisions.
+
+---
 
 ## Tasks
 
-| Task | Difficulty | Description |
-|------|-----------|-------------|
-| `easy` | Low | Clear policy violations or clearly allowed content. Minimal ambiguity. |
-| `medium` | Medium | Ambiguous content (satire, graphic news, coded language) requiring precedent lookup. |
-| `hard` | High | Appeal cases with conflicting precedents, or content where the user threatens legal action. |
+| Task | Difficulty | Episodes | Description |
+|------|-----------|----------|-------------|
+| `easy` | Low | 5 | Clear policy violations (hate speech, dehumanization) or clearly allowed content (news, political opinion). Minimal ambiguity. |
+| `medium` | Medium | 5 | Ambiguous content requiring careful precedent analysis — coded language, edgy satire, graphic news with temporal context. |
+| `hard` | High | 7 | Appeal cases with conflicting precedents, coded dog-whistle language, compelling but wrong arguments, legal threats. Requires nuanced policy interpretation. |
 
-Each task tier contains 5 fixed episodes. Episodes are selected deterministically using seeded randomness for reproducibility.
+Episodes are selected via `episode_index` in reset options (default: 0). Each episode has deterministic grading — no randomness in scoring.
+
+---
 
 ## Action Space
 
@@ -54,12 +60,14 @@ action = ContentModerationAction(
     query="hate speech dehumanizing ethnicity"
 )
 
-# Make a final decision
+# Make a final decision with reason (citing policy clause improves score)
 action = ContentModerationAction(
     action_type="remove_content",
-    reason="Dehumanizing language targeting ethnic group"
+    reason="Dehumanizing language targeting protected ethnic group"
 )
 ```
+
+---
 
 ## Observation Space
 
@@ -67,15 +75,38 @@ After each step, the agent receives:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `post_content` | str | The post or comment being reviewed |
-| `post_metadata` | dict | Platform, report count, timestamp, is_appeal flag |
-| `policy_summary` | str | Platform community policy (always visible) |
-| `precedents` | list | Retrieved precedent cases (populated after `retrieve_precedents`) |
-| `actions_taken` | list | History of actions taken this episode |
-| `step_count` | int | Current step number |
-| `message` | str | Feedback from environment |
-| `done` | bool | Whether the episode has ended |
-| `reward` | float | Reward for the last action |
+| `post_content` | `str` | The post or comment being reviewed |
+| `post_metadata` | `dict` | Rich metadata: report count, author history, engagement, auto-flag score, reporter credibility, content type, temporal context |
+| `policy_summary` | `str` | Platform community policy (always visible) |
+| `precedents` | `list` | Retrieved precedent cases (populated after `retrieve_precedents`) |
+| `similar_post_count` | `int` | Number of similar posts on platform |
+| `confidence_guidance` | `str` | Guidance on certainty required |
+| `actions_taken` | `list` | History of actions taken this episode |
+| `step_count` | `int` | Current step number |
+| `message` | `str` | Feedback from environment (including precedent conflict warnings) |
+| `done` | `bool` | Whether the episode has ended |
+| `reward` | `float` | Reward for the last action |
+
+### Post Metadata Fields
+
+Each post includes realistic Trust & Safety queue metadata:
+
+| Field | Description |
+|-------|-------------|
+| `author_account_age_days` | Account age (15 = brand new, 3650 = 10yr veteran) |
+| `author_prior_violations` | Previous policy violations |
+| `author_verified` | Verified account status |
+| `author_follower_count` | Audience reach |
+| `content_type` | text_post, comment, shared_post, group_post, appeal, direct_message_report |
+| `has_media` | Whether post includes image/video |
+| `engagement_count` | Total likes + shares |
+| `reporter_accuracy_rate` | Reporter's historical accuracy (trusted flagger vs mass-reporter) |
+| `report_category` | What the reporter flagged it as |
+| `auto_flag_score` | Automated classifier confidence (0.0–1.0) |
+| `current_events_context` | Active platform protocols (elections, disasters) — present on some episodes |
+| `original_moderator_reasoning` | How original decision was made — present on appeal episodes |
+
+---
 
 ## Reward Structure
 
@@ -85,11 +116,24 @@ After each step, the agent receives:
 | Retrieved irrelevant precedent | -0.10 |
 | Correct final decision | +0.50 |
 | Wrong final decision | -0.30 |
+| Near-miss decision (adjacent action) | -0.15 |
+| Cited correct policy clause in reason | +0.10 |
+| No reason provided with final action | -0.05 |
 | Relevant precedent bonus (grader) | +0.15 |
 | Same action called twice (loop) | -0.20 |
 | Hit step limit without deciding | -0.30 |
 
-Final episode score is clamped to **0.0–1.0**. Maximum achievable score per episode: **0.8**.
+Final episode score is clamped to 0.0–1.0.
+
+**Maximum achievable score:** 0.90 (retrieve relevant + correct decision + relevant precedent bonus + policy clause citation)
+
+**Adjacent action pairs** that receive reduced penalty (-0.15 instead of -0.30):
+- `remove_content` ↔ `add_warning_label`
+- `allow_content` ↔ `add_warning_label`
+- `overturn_removal` ↔ `allow_content`
+- `uphold_removal` ↔ `remove_content`
+
+---
 
 ## Quick Start
 
@@ -121,7 +165,7 @@ with ContentModerationEnv(base_url="https://hemil087-content-moderation-env.hf.s
     # Make final decision
     action = ContentModerationAction(
         action_type="remove_content",
-        reason="Dehumanizing language"
+        reason="Dehumanizing language targeting protected group"
     )
     result = env.step(action)
     print(f"Score: {result.reward}, Done: {result.done}")
@@ -142,23 +186,16 @@ async def main():
 asyncio.run(main())
 ```
 
+---
+
 ## Running Inference
 
 The baseline agent uses an LLM via the OpenAI-compatible API:
 
 ```bash
-# Linux/Mac
-export API_BASE_URL=https://api.groq.com/openai/v1
-export MODEL_NAME=llama-3.3-70b-versatile
-export OPENAI_API_KEY=your_key_here
-python inference.py
-```
-
-```bash
-# Windows
-set API_BASE_URL=https://api.groq.com/openai/v1
-set MODEL_NAME=llama-3.3-70b-versatile
-set OPENAI_API_KEY=your_key_here
+export HF_TOKEN=your_hf_token_here
+export API_BASE_URL=https://router.huggingface.co/v1
+export MODEL_NAME=Qwen/Qwen2.5-72B-Instruct
 python inference.py
 ```
 
@@ -166,12 +203,14 @@ python inference.py
 
 | Task | Score |
 |------|-------|
-| Easy | 0.80 |
-| Medium | 0.80 |
-| Hard | 0.80 |
-| **Average** | **0.80** |
+| Easy | 0.90 |
+| Medium | 0.90 |
+| Hard | 0.90 |
+| Average | 0.90 |
 
 Model: `llama-3.3-70b-versatile` via Groq
+
+---
 
 ## Local Development
 
@@ -179,27 +218,24 @@ Model: `llama-3.3-70b-versatile` via Groq
 # Clone and install
 git clone https://github.com/Hemil087/content-moderation-env.git
 cd content-moderation-env
-python -m venv venv
-venv\Scripts\activate  # Windows
-pip install -r requirements.txt
+pip install -e .
 
 # Start server
 uvicorn content_moderation_env.server.app:app --reload
 
 # Test endpoints
 curl http://localhost:8000/health
-curl -X POST http://localhost:8000/reset
-
-# Run local test (no server needed)
-python test_local.py
+curl -X POST http://localhost:8000/reset -H "Content-Type: application/json" \
+  -d '{"options": {"task_id": "easy", "episode_index": 0}}'
 ```
+
+---
 
 ## Project Structure
 
 ```
 content-moderation-env/
 ├── inference.py                          # LLM agent script (repo root)
-├── test_local.py                         # Local environment test
 ├── Dockerfile                            # Container build
 ├── requirements.txt                      # Dependencies
 ├── content_moderation_env/
@@ -212,6 +248,25 @@ content-moderation-env/
 │       ├── app.py                        # FastAPI application
 │       └── content_moderation_env_environment.py  # Core environment logic
 ```
+
+---
+
+## Environment Design
+
+### Precedent Database
+20 fixed precedent cases covering hate speech, political criticism, satire, news reporting, graphic content, and more. Precedents are retrieved via keyword search — deterministic, no external API calls.
+
+### Grading
+All grading is deterministic (pure Python, no LLM calls). The grader checks:
+1. Was the final action correct?
+2. Did the agent retrieve relevant precedents?
+3. Did the agent cite the correct policy clause in their reason?
+4. Did the agent provide a reason at all?
+
+### Precedent Conflict Detection
+When retrieved precedents have conflicting decisions (e.g., one says "allowed", another says "removed"), the environment flags this in the message, forcing the agent to reason about which precedent applies.
+
+---
 
 ## License
 
