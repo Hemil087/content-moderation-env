@@ -452,7 +452,10 @@ def _search_precedents(query: str, already_retrieved: list, top_k: int = 3) -> l
 
     for pid, case in PRECEDENT_DATABASE.items():
         # Score based on tag overlap + content word overlap
-        tag_words = set(" ".join(case["tags"]).lower().split("_"))
+        tag_words = set()
+        for tag in case["tags"]:
+            tag_words.add(tag.lower())
+            tag_words.update(tag.lower().replace("_", " ").replace("-", " ").split())
         content_words = set(case["content"].lower().split())
         reason_words = set(case["reason"].lower().split())
 
@@ -460,8 +463,9 @@ def _search_precedents(query: str, already_retrieved: list, top_k: int = 3) -> l
         overlap = len(query_words & all_case_words)
         scored.append((overlap, pid, case))
 
-    # Sort by overlap descending
+    # Sort by overlap descending, filter out already retrieved
     scored.sort(key=lambda x: x[0], reverse=True)
+    scored = [(s, pid, case) for s, pid, case in scored if pid not in already_retrieved]
 
     results = []
     for _, pid, case in scored[:top_k]:
@@ -562,9 +566,10 @@ class ContentModerationEnvironment(Environment):
 
         self._task_id = task_id
 
-        # Seeded random per task_id for reproducibility
-        rng = random.Random(hash(task_id) % 10000)
-        episode = rng.choice(EPISODES[task_id])
+        # Select episode by index (allows judges to test all episodes)
+        episode_index = (options or {}).get("episode_index", 0)
+        episode_index = int(episode_index) % len(EPISODES[task_id])
+        episode = EPISODES[task_id][episode_index]
 
         self._current_episode = episode
         self._actions_taken = []
@@ -605,7 +610,7 @@ class ContentModerationEnvironment(Environment):
         self._actions_taken.append(action.action_type)
 
         # Step limit check
-        if self._state.step_count > MAX_STEPS:
+        if self._state.step_count >= MAX_STEPS:
             self._done = True
             step_reward -= 0.3
             self._running_reward += step_reward
