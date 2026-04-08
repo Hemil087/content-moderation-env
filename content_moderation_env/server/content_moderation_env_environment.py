@@ -590,6 +590,57 @@ EPISODES = {
                 "policy_clause": "escalation",
             },
         },
+        {
+            "post_content": "Look, I'm just saying certain communities have cultural values that are statistically linked to higher crime rates. I'm not saying they're bad people, I'm citing FBI data. Facts can't be hate speech.",
+            "post_metadata": {
+                "report_count": 31,
+                "is_appeal": False,
+                "platform": "social_feed",
+                "content_type": "text_post",
+                "timestamp": "2024-03-30T12:00:00Z",
+                "author_account_age_days": 1095,
+                "author_prior_violations": 1,
+                "author_verified": False,
+                "author_follower_count": 4200,
+                "has_media": False,
+                "engagement_count": 8900,
+                "reporter_accuracy_rate": 0.78,
+                "report_category": "hate_speech",
+                "auto_flag_score": 0.64,
+            },
+            "ground_truth": {
+                "expected_action": "remove_content",
+                "relevant_precedent_ids": ["P-018", "P-015", "P-016"],
+                "policy_clause": "protected_characteristics",
+            },
+        },
+        {
+            "post_content": "APPEAL: My post said 'these people are ruining our neighborhood with their loud music and weird food smells.' I was complaining about my SPECIFIC neighbors, not an ethnic group. This is a noise complaint, not racism. You removed it unfairly.",
+            "post_metadata": {
+                "report_count": 0,
+                "is_appeal": True,
+                "original_removal_reason": "dehumanizing language targeting ethnic group — coded language",
+                "original_moderator_reasoning": "Post uses 'these people' and 'weird food' as coded ethnic targeting. Pattern matches prior removals P-015 and P-018.",
+                "platform": "appeal_queue",
+                "content_type": "appeal",
+                "timestamp": "2024-03-31T10:30:00Z",
+                "appeal_submission_date": "2024-03-31T09:00:00Z",
+                "author_account_age_days": 2555,
+                "author_prior_violations": 0,
+                "author_verified": False,
+                "author_follower_count": 890,
+                "has_media": False,
+                "engagement_count": 45,
+                "reporter_accuracy_rate": 0.0,
+                "report_category": "appeal",
+                "auto_flag_score": 0.71,
+            },
+            "ground_truth": {
+                "expected_action": "uphold_removal",
+                "relevant_precedent_ids": ["P-015", "P-018", "P-001"],
+                "policy_clause": "protected_characteristics",
+            },
+        },
     ],
 }
 
@@ -641,6 +692,29 @@ def _search_precedents(query: str, already_retrieved: list, top_k: int = 3) -> l
 
 
 # ---------------------------------------------------------------------------
+# Grader lookup tables
+# ---------------------------------------------------------------------------
+
+ADJACENT_ACTIONS = {
+    ("remove_content", "add_warning_label"): -0.15,
+    ("add_warning_label", "remove_content"): -0.15,
+    ("allow_content", "add_warning_label"): -0.15,
+    ("add_warning_label", "allow_content"): -0.15,
+    ("overturn_removal", "allow_content"): -0.15,
+    ("uphold_removal", "remove_content"): -0.15,
+}
+
+CLAUSE_KEYWORDS = {
+    "protected_characteristics": ["protected", "dehumaniz", "discriminat", "identity", "hate"],
+    "political_criticism": ["political", "criticism", "opinion", "policy", "public figure"],
+    "warning_label": ["warning", "graphic", "disturbing", "misleading", "sensitive"],
+    "news_reporting": ["news", "report", "factual", "journalist", "source"],
+    "satire": ["satire", "parody", "comedy", "humor", "sarcas"],
+    "escalation": ["escalat", "legal", "threaten", "uncertain", "lawyer"],
+}
+
+
+# ---------------------------------------------------------------------------
 # Grader
 # ---------------------------------------------------------------------------
 
@@ -652,6 +726,8 @@ def _grade_episode(
     actions_taken: list,
     step_count: int,
     running_reward: float,
+    reason: str = "",
+    expected_clause: str = "",
 ) -> float:
     """
     Deterministic grader — returns final episode score clamped to 0.0–1.0.
@@ -663,13 +739,26 @@ def _grade_episode(
     if actual_action == expected_action:
         score += 0.5
     else:
-        score -= 0.3
+        # Check for near-miss (adjacent action pairs get reduced penalty)
+        pair = (actual_action, expected_action)
+        penalty = ADJACENT_ACTIONS.get(pair, -0.3)
+        score += penalty
 
     # Precedent usage — did agent retrieve at least one relevant precedent?
     retrieved_set = set(retrieved_precedent_ids)
     relevant_set = set(relevant_precedent_ids)
     if retrieved_set & relevant_set:
         score += 0.15
+
+    # Policy clause citation — did agent mention the correct policy in reason?
+    if reason and expected_clause:
+        clause_keywords = CLAUSE_KEYWORDS.get(expected_clause, [])
+        if any(kw in reason.lower() for kw in clause_keywords):
+            score += 0.10
+
+    # Penalty for no reason on final decision
+    if not reason:
+        score -= 0.05
 
     # Clamp to 0.0–1.0
     return round(max(0.0, min(1.0, score)), 4)
@@ -698,7 +787,9 @@ class ContentModerationEnvironment(Environment):
         -0.2  for calling the same action twice (loop penalty)
         -0.3  for hitting step limit without deciding
         +0.5  at end for correct final decision (via grader)
-        -0.3  at end for wrong final decision (via grader)
+        -0.3  at end for wrong final decision (-0.15 for near-miss)
+        +0.10 for citing correct policy clause in reason
+        -0.05 for providing no reason with final decision
     """
 
     SUPPORTS_CONCURRENT_SESSIONS: bool = True
@@ -801,6 +892,11 @@ class ContentModerationEnvironment(Environment):
                 step_reward -= 0.1
                 message = f"Retrieved {len(results)} precedents. None closely match this case."
 
+            # Check for conflicting precedents
+            decisions_in_results = set(r["decision"] for r in results)
+            if len(decisions_in_results) > 1:
+                message += " CONFLICT: Retrieved precedents have different decisions — you must reason about which applies here."
+
             self._running_reward += step_reward
 
             return ContentModerationObservation(
@@ -833,6 +929,7 @@ class ContentModerationEnvironment(Environment):
             self._done = True
 
             expected = self._current_episode["ground_truth"]["expected_action"]
+            expected_clause = self._current_episode["ground_truth"].get("policy_clause", "")
             final_score = _grade_episode(
                 expected_action=expected,
                 actual_action=action.action_type,
@@ -841,6 +938,8 @@ class ContentModerationEnvironment(Environment):
                 actions_taken=self._actions_taken,
                 step_count=self._state.step_count,
                 running_reward=self._running_reward,
+                reason=action.reason or "",
+                expected_clause=expected_clause,
             )
 
             if action.action_type == expected:
